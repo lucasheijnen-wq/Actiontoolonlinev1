@@ -6,8 +6,7 @@ import Anthropic from '@anthropic-ai/sdk'
 import { supabase } from '@/lib/supabase'
 import type { ProductPrediction } from '@/types/trends'
 
-// Vercel hobby plan max is 300s
-export const maxDuration = 300
+export const maxDuration = 60
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY ?? '' })
 
