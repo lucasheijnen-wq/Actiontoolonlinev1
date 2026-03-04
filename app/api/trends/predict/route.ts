@@ -6,8 +6,8 @@ import Anthropic from '@anthropic-ai/sdk'
 import { supabase } from '@/lib/supabase'
 import type { ProductPrediction } from '@/types/trends'
 
-// Allow up to 10 minutes — scraping + sequential Claude batches take ~3–5 min
-export const maxDuration = 600
+// Vercel hobby plan max is 300s
+export const maxDuration = 300
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY ?? '' })
 
