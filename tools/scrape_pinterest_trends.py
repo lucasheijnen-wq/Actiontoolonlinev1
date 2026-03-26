@@ -25,8 +25,15 @@ import sys
 import json
 import os
 import re
+import unicodedata
 from datetime import datetime, timezone
 from typing import Optional
+
+
+def normalize_keyword(keyword: str) -> str:
+    """Normalize keyword: strip diacritics and lowercase for dedup comparison."""
+    nfkd = unicodedata.normalize('NFD', keyword)
+    return ''.join(c for c in nfkd if unicodedata.category(c) != 'Mn').lower().strip()
 
 
 def get_iso_week() -> str:
@@ -466,6 +473,23 @@ def scrape_trends(region: str) -> dict:
 
     except Exception as e:
         return {"trends": [], "count": 0, "error": str(e)}
+
+    # ── Deduplicate: same keyword (ignoring diacritics) keeps the one with most data ──
+    seen: dict[str, int] = {}
+    deduped: list[dict] = []
+    for t in trends:
+        norm = normalize_keyword(t["keyword"])
+        if norm in seen:
+            existing = deduped[seen[norm]]
+            # Keep the one with growth_raw data; if both have it, keep search over popular
+            if not existing.get("growth_raw") and t.get("growth_raw"):
+                deduped[seen[norm]] = t
+            elif existing.get("category") == "popular" and t.get("category") == "search":
+                deduped[seen[norm]] = t
+        else:
+            seen[norm] = len(deduped)
+            deduped.append(t)
+    trends = deduped
 
     result = {
         "trends": trends,
