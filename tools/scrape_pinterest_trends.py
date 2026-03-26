@@ -189,20 +189,6 @@ def scrape_trends(region: str) -> dict:
                     full_page=True,
                 )
 
-            # ── If logged in, click "Zoektrends bekijken" to unlock full search trends ──
-            if logged_in:
-                try:
-                    view_btn = page.locator('[data-test-id="view-shopping-trends-button"]').first
-                    if view_btn.is_visible(timeout=3000):
-                        view_btn.click(timeout=5000)
-                        page.wait_for_timeout(5000)
-                        # Scroll down to load all results
-                        for _ in range(5):
-                            page.keyboard.press("End")
-                            page.wait_for_timeout(1000)
-                except Exception as e:
-                    errors.append(f"view_search_trends: {e}")
-
             # Wait for dynamic content
             page.wait_for_timeout(3000)
 
@@ -311,6 +297,74 @@ def scrape_trends(region: str) -> dict:
             except Exception as e:
                 errors.append(f"spotlight: {e}")
 
+            # ── Section 1b: Spotlight per interest category (US only) ──
+            # The second <select> on the page filters spotlight trends by interest.
+            INTEREST_FILTERS = {
+                "architectuur":           "918105274631",
+                "bruiloft":               "903260720461",
+                "doe-het-zelf en knutselen": "934876475639",
+                "eten en drinken":        "918530398158",
+                "evenementenplanning":    "941870572865",
+                "gezondheid":             "898620064290",
+                "huisinrichting":         "935249274030",
+                "kunst":                  "961238559656",
+                "mode":                   "FASHION",
+                "ouderschap":             "920236059316",
+                "reizen":                 "908182459161",
+                "tuinieren":              "909983286710",
+                "verzorging":             "935541271955",
+            }
+            try:
+                selects = page.locator("select")
+                interest_select = selects.nth(1) if selects.count() >= 2 else None
+                if interest_select and interest_select.is_visible(timeout=2000):
+                    for interest_name, interest_value in INTEREST_FILTERS.items():
+                        try:
+                            interest_select.select_option(value=interest_value, timeout=3000)
+                            page.wait_for_timeout(3000)
+
+                            cat_spotlight = page.evaluate("""() => {
+                                const results = [];
+                                const cards = document.querySelectorAll('[data-test-id="topic-card"]');
+                                cards.forEach(card => {
+                                    const lines = (card.innerText || '').split('\\n').map(l => l.trim()).filter(Boolean);
+                                    if (lines.length >= 2) {
+                                        const keyword = lines[1];
+                                        let growth = null;
+                                        for (const line of lines.slice(2)) {
+                                            if (line.includes('%') || line.includes('MoM')) {
+                                                growth = line;
+                                                break;
+                                            }
+                                        }
+                                        results.push({ keyword, growth });
+                                    }
+                                });
+                                return results;
+                            }""")
+                            for item in cat_spotlight:
+                                kw = item.get("keyword", "").strip()
+                                if kw and len(kw) > 2:
+                                    growth_raw = item.get("growth")
+                                    trends.append({
+                                        "keyword": kw,
+                                        "category": interest_name,
+                                        "growth_raw": growth_raw,
+                                        "growth_pct": parse_growth(growth_raw) if growth_raw else None,
+                                        "region": region,
+                                    })
+                        except Exception as e:
+                            errors.append(f"interest_{interest_name}: {e}")
+
+                    # Reset filter to "Alle"
+                    try:
+                        interest_select.select_option(value="ALL", timeout=3000)
+                        page.wait_for_timeout(2000)
+                    except Exception:
+                        pass
+            except Exception as e:
+                errors.append(f"interest_filters: {e}")
+
             # ── Section 2: Shopping trends ("Winkeltrends") ──
             try:
                 shopping = page.evaluate("""() => {
@@ -350,6 +404,33 @@ def scrape_trends(region: str) -> dict:
                         })
             except Exception as e:
                 errors.append(f"shopping: {e}")
+
+            # ── Navigate to full search trends page (if logged in) ──
+            if logged_in:
+                try:
+                    # Go back to trends overview first (interest filters may have changed the page)
+                    page.goto("https://trends.pinterest.com", wait_until="networkidle", timeout=30000)
+                    page.wait_for_timeout(3000)
+
+                    # Re-select region if needed
+                    if select_value != "US":
+                        try:
+                            sel = page.locator("select").first
+                            if sel.is_visible(timeout=3000):
+                                sel.select_option(value=select_value, timeout=3000)
+                                page.wait_for_timeout(5000)
+                        except Exception:
+                            pass
+
+                    view_btn = page.locator('[data-test-id="view-shopping-trends-button"]').first
+                    if view_btn.is_visible(timeout=3000):
+                        view_btn.click(timeout=5000)
+                        page.wait_for_timeout(5000)
+                        for _ in range(5):
+                            page.keyboard.press("End")
+                            page.wait_for_timeout(1000)
+                except Exception as e:
+                    errors.append(f"view_search_trends: {e}")
 
             # ── Section 3: Search keyword trends ("Trends zoeken" / "Populaire trefwoorden") ──
             try:
