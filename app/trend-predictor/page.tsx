@@ -142,7 +142,7 @@ function SavedProvider({ children }: { children: React.ReactNode }) {
 // ─── Main Page ───────────────────────────────────────────────────────────────
 
 type TabId = 'home' | 'saved' | 'trends' | 'rankings' | 'social' | 'pains-gains'
-type SourceFilter = 'all' | 'reddit' | 'tiktok' | 'facebook'
+type SourceFilter = 'all' | 'reddit' | 'tiktok' | 'facebook' | 'pinterest'
 
 export default function TrendPredictorPage() {
   return (
@@ -860,6 +860,26 @@ function RankedProductRow({ prediction, rank, onSelect }: { prediction: ProductP
 function ProductDetailDrawer({ prediction, onClose }: { prediction: ProductPrediction; onClose: () => void }) {
   const { isSaved, toggleSave } = useSaved()
   const saved = isSaved(prediction)
+  const [pinterestMatches, setPinterestMatches] = useState<PinterestTrendRow[]>([])
+
+  useEffect(() => {
+    let cancelled = false
+    apiFetch('/api/trends/pinterest')
+      .then((r) => r.json())
+      .then((data) => {
+        const trends: PinterestTrendRow[] = data.trends ?? []
+        if (trends.length === 0 || cancelled) return
+        return apiFetch('/api/trends/pinterest-match', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ product: prediction, trends }),
+        })
+          .then((r) => r.json())
+          .then((res) => { if (!cancelled) setPinterestMatches(res.matches ?? []) })
+      })
+      .catch(() => { /* non-critical */ })
+    return () => { cancelled = true }
+  }, [prediction.searchTerm, prediction.productName, prediction.category])
 
   const platform = PLATFORM_STYLES[prediction.platformBuzz] ?? PLATFORM_STYLES.mixed
   const searchUrl = `https://www.action.com/nl-nl/search/?q=${encodeURIComponent(prediction.searchTerm)}`
@@ -1006,6 +1026,19 @@ function ProductDetailDrawer({ prediction, onClose }: { prediction: ProductPredi
                   ))}
                 </div>
               )}
+              {pinterestMatches.map((t, i) => (
+                <div key={i} className="flex items-start gap-2.5 px-3 py-2.5 rounded-lg"
+                  style={{ backgroundColor: '#fef2f2', border: '1px solid #fecaca' }}>
+                  <div className="w-4 h-4 rounded-full flex-shrink-0 mt-0.5 flex items-center justify-center"
+                    style={{ backgroundColor: '#e60023' }}>
+                    <span className="text-[10px] font-bold text-white">P</span>
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <p className="text-xs text-gray-700 leading-relaxed">{t.keyword}</p>
+                    <p className="text-[10px] text-gray-400 mt-0.5">{t.category} · {t.region === 'US' ? '🇺🇸 VS' : t.region === 'NL' ? '🇳🇱 NL' : t.region}</p>
+                  </div>
+                </div>
+              ))}
             </div>
           </div>
 
@@ -1441,6 +1474,7 @@ type UnifiedPost =
 function TrendsTab() {
   const [posts, setPosts] = useState<UnifiedPost[]>([])
   const [filtered, setFiltered] = useState<UnifiedPost[]>([])
+  const [pinterestTrends, setPinterestTrends] = useState<PinterestTrendRow[]>([])
   const [source, setSource] = useState<SourceFilter>('all')
   const [search, setSearch] = useState('')
   const [loading, setLoading] = useState(true)
@@ -1454,16 +1488,16 @@ function TrendsTab() {
       apiFetch('/api/trends').then((r) => r.json()),
       apiFetch('/api/trends/tiktok').then((r) => r.json()),
       apiFetch('/api/trends/facebook').then((r) => r.json()),
+      apiFetch('/api/trends/pinterest').then((r) => r.json()).catch(() => ({ trends: [] })),
     ])
-      .then(([reddit, tiktok, facebook]) => {
+      .then(([reddit, tiktok, facebook, pinterest]) => {
         const redditPosts: UnifiedPost[] = (Array.isArray(reddit) ? reddit : []).map((p: TrendPost) => ({ source: 'reddit' as const, ...p }))
         const tiktokPosts: UnifiedPost[] = (Array.isArray(tiktok) ? tiktok : []).map((p: TikTokPost) => ({ source: 'tiktok' as const, ...p }))
         const fbPosts: UnifiedPost[] = (Array.isArray(facebook) ? facebook : []).map((p: FacebookPost) => ({ source: 'facebook' as const, ...p }))
-
-        const all = [...redditPosts, ...tiktokPosts, ...fbPosts].sort(
+        setPosts([...redditPosts, ...tiktokPosts, ...fbPosts].sort(
           (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
-        )
-        setPosts(all)
+        ))
+        setPinterestTrends(pinterest.trends ?? [])
       })
       .catch((err: Error) => setError(err.message))
       .finally(() => setLoading(false))
@@ -1471,7 +1505,7 @@ function TrendsTab() {
 
   useEffect(() => {
     let result = posts
-    if (source !== 'all') {
+    if (source !== 'all' && source !== 'pinterest') {
       result = result.filter((p) => p.source === source)
     }
     if (search.trim()) {
@@ -1514,6 +1548,7 @@ function TrendsTab() {
             { id: 'reddit', label: 'Reddit', count: counts.reddit ?? 0 },
             { id: 'tiktok', label: 'TikTok', count: counts.tiktok ?? 0 },
             { id: 'facebook', label: 'Facebook', count: counts.facebook ?? 0 },
+            { id: 'pinterest', label: 'Pinterest', count: pinterestTrends.length },
           ] as { id: SourceFilter; label: string; count: number }[]).map((item) => {
             const isActive = source === item.id
             return (
@@ -1582,8 +1617,17 @@ function TrendsTab() {
         </div>
       )}
 
+      {/* Pinterest cards */}
+      {!loading && source === 'pinterest' && (
+        pinterestTrends.length > 0
+          ? <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+              {pinterestTrends.map((t, i) => <PinterestCard key={i} trend={t} />)}
+            </div>
+          : <div className="py-12 text-center text-sm text-gray-400">Geen Pinterest trends beschikbaar.</div>
+      )}
+
       {/* Cards */}
-      {!loading && filtered.length > 0 && (
+      {!loading && source !== 'pinterest' && filtered.length > 0 && (
         <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
           {filtered.map((post, i) => {
             if (post.source === 'reddit') return <RedditCard key={`r-${post.id}-${i}`} post={post} />
@@ -1720,6 +1764,29 @@ function FacebookCard({ post }: { post: FacebookPost & { source: 'facebook' } })
   )
 }
 
+// ─── Pinterest Card ───────────────────────────────────────────────────────────
+
+function PinterestCard({ trend }: { trend: PinterestTrendRow }) {
+  return (
+    <div className="bg-white rounded-xl border border-gray-200 p-5 flex flex-col gap-3 hover:border-gray-300 hover:shadow-sm transition-all">
+      <div className="flex items-center justify-between gap-2">
+        <span className="px-2.5 py-1 rounded-full text-xs font-semibold capitalize" style={{ backgroundColor: '#fef2f2', color: '#b91c1c' }}>
+          {trend.category.replace(/-/g, ' ')}
+        </span>
+        <div className="flex items-center gap-2">
+          <span style={{ backgroundColor: '#e60023', color: '#fff', padding: '2px 6px', borderRadius: 9999, fontSize: 10, fontWeight: 600 }}>Pinterest</span>
+          <span className="text-xs text-gray-400">{trend.region === 'US' ? '🇺🇸 VS' : trend.region === 'NL' ? '🇳🇱 NL' : trend.region}</span>
+        </div>
+      </div>
+      <h3 className="text-sm font-semibold text-gray-900 leading-snug">{trend.keyword}</h3>
+      {trend.growth_raw && (
+        <p className="text-xs text-gray-500">{trend.growth_raw}</p>
+      )}
+      <p className="text-xs text-gray-400 mt-auto">Week {trend.week}</p>
+    </div>
+  )
+}
+
 // ─── Rankings Tab ─────────────────────────────────────────────────────────────
 
 function RankingsTab() {
@@ -1727,10 +1794,6 @@ function RankingsTab() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [expanded, setExpanded] = useState<number | null>(null)
-  const [pinterestTrends, setPinterestTrends] = useState<Array<{ keyword: string; category: string; growth_raw: string | null; week: string; region: string }>>([])
-  const [pinterestLoading, setPinterestLoading] = useState(true)
-  const [pinterestRegion, setPinterestRegion] = useState<string>('all')
-
   useEffect(() => {
     // Try localStorage first (populated by HomeTab) for instant load
     try {
@@ -1754,13 +1817,6 @@ function RankingsTab() {
       })
       .catch((e: Error) => setError(e.message))
       .finally(() => setLoading(false))
-
-    // Fetch Pinterest trends
-    apiFetch('/api/trends/pinterest')
-      .then((r) => r.json())
-      .then((data) => setPinterestTrends(data.trends ?? []))
-      .catch(() => { /* non-critical */ })
-      .finally(() => setPinterestLoading(false))
   }, [])
 
   if (loading) return <div className="px-8 py-12 text-center text-sm text-gray-500">Loading rankings…</div>
@@ -1803,60 +1859,6 @@ function RankingsTab() {
           })}
         </div>
       </div>
-
-      {/* Pinterest Trends */}
-      {!pinterestLoading && pinterestTrends.length > 0 && (() => {
-        const regions = Array.from(new Set(pinterestTrends.map(t => t.region).filter(Boolean)))
-        const filtered = pinterestRegion === 'all' ? pinterestTrends : pinterestTrends.filter(t => t.region === pinterestRegion)
-        const grouped: Record<string, Array<{ keyword: string; growth_raw: string | null }>> = {}
-        for (const t of filtered) {
-          const cat = t.category
-          if (!grouped[cat]) grouped[cat] = []
-          grouped[cat].push({ keyword: t.keyword, growth_raw: t.growth_raw })
-        }
-        return (
-          <div className="rounded-xl border border-gray-200 bg-white p-5">
-            <div className="flex items-center justify-between mb-3">
-              <div className="flex items-center gap-3">
-                <p className="text-xs font-bold uppercase tracking-wider text-gray-400">Pinterest Trends</p>
-                <div className="flex gap-1">
-                  <button
-                    onClick={() => setPinterestRegion('all')}
-                    className={`text-xs px-2 py-0.5 rounded-full transition-colors ${pinterestRegion === 'all' ? 'bg-red-600 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}
-                  >Alles</button>
-                  {regions.map(r => (
-                    <button
-                      key={r}
-                      onClick={() => setPinterestRegion(r)}
-                      className={`text-xs px-2 py-0.5 rounded-full transition-colors ${pinterestRegion === r ? 'bg-red-600 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}
-                    >{r === 'US' ? 'VS' : r === 'BENELUX' ? 'Benelux' : r}</button>
-                  ))}
-                </div>
-              </div>
-              {filtered[0]?.week && (
-                <span className="text-xs text-gray-400">{filtered[0].week}</span>
-              )}
-            </div>
-            <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
-              {Object.entries(grouped).map(([cat, items]) => (
-                <div key={cat}>
-                  <p className="text-xs font-semibold text-gray-700 mb-1.5 capitalize">{cat.replace(/-/g, ' ')}</p>
-                  <div className="flex flex-wrap gap-1">
-                    {items.slice(0, 8).map((item, j) => (
-                      <span key={j} className="inline-flex items-center gap-1 text-xs bg-red-50 text-red-700 px-2 py-0.5 rounded-full">
-                        {item.keyword}
-                        {item.growth_raw && (
-                          <span className="text-red-400 text-[10px]">{item.growth_raw.split('|')[0].trim()}</span>
-                        )}
-                      </span>
-                    ))}
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
-        )
-      })()}
 
       {/* Full ranked list — click to expand criteria */}
       <div className="space-y-2">
@@ -1965,8 +1967,21 @@ function SocialDataTab() {
   const [error, setError] = useState<string | null>(null)
   const [platform, setPlatform] = useState('')
   const [page, setPage] = useState(1)
+  const [pinterestTrends, setPinterestTrends] = useState<PinterestTrendRow[]>([])
+  const [pinterestLoading, setPinterestLoading] = useState(false)
 
   useEffect(() => {
+    if (platform === 'Pinterest') {
+      if (pinterestTrends.length > 0) return
+      setPinterestLoading(true)
+      apiFetch('/api/trends/pinterest')
+        .then((r) => r.json())
+        .then((d) => setPinterestTrends(d.trends ?? []))
+        .catch(() => { /* non-critical */ })
+        .finally(() => setPinterestLoading(false))
+      return
+    }
+
     const cacheKey = `${SOCIAL_CACHE_KEY}_${platform}_${page}`
     try {
       const cached = sessionStorage.getItem(cacheKey)
@@ -1988,7 +2003,7 @@ function SocialDataTab() {
       })
       .catch((e: Error) => setError(e.message))
       .finally(() => setLoading(false))
-  }, [platform, page])
+  }, [platform, page, pinterestTrends.length])
 
   const changePlatform = (p: string) => { setPlatform(p); setPage(1) }
 
@@ -1996,9 +2011,9 @@ function SocialDataTab() {
     <div className="px-8 py-6 space-y-4">
       {/* Platform filter */}
       <div className="flex gap-2 flex-wrap">
-        {(['', 'TikTok', 'Facebook', 'Reddit'] as const).map((p) => {
+        {(['', 'TikTok', 'Facebook', 'Reddit', 'Pinterest'] as const).map((p) => {
           const label = p || 'All'
-          const count = p && data ? data.platformCounts[p] : data?.total
+          const count = p === 'Pinterest' ? pinterestTrends.length || undefined : p && data ? data.platformCounts[p] : data?.total
           return (
             <button key={label} onClick={() => changePlatform(p)}
               className="px-3 py-1.5 rounded-lg text-sm font-medium transition-colors"
@@ -2011,10 +2026,21 @@ function SocialDataTab() {
         })}
       </div>
 
-      {loading && <div className="py-12 text-center text-sm text-gray-400">Loading posts…</div>}
-      {error && <div className="text-sm text-red-600">{error}</div>}
+      {/* Pinterest view */}
+      {platform === 'Pinterest' && (
+        pinterestLoading
+          ? <div className="py-12 text-center text-sm text-gray-400">Pinterest trends laden…</div>
+          : pinterestTrends.length > 0
+            ? <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+                {pinterestTrends.map((t, i) => <PinterestCard key={i} trend={t} />)}
+              </div>
+            : <div className="py-12 text-center text-sm text-gray-400">Geen Pinterest trends beschikbaar.</div>
+      )}
 
-      {data && !loading && (
+      {platform !== 'Pinterest' && loading && <div className="py-12 text-center text-sm text-gray-400">Loading posts…</div>}
+      {platform !== 'Pinterest' && error && <div className="text-sm text-red-600">{error}</div>}
+
+      {platform !== 'Pinterest' && data && !loading && (
         <>
           <div className="space-y-2">
             {data.items.map((post, i) => {
@@ -2054,9 +2080,15 @@ function SocialDataTab() {
           )}
         </>
       )}
+
     </div>
   )
 }
+
+// ─── Pinterest Card / shared type ────────────────────────────────────────────
+
+type PinterestTrendRow = { keyword: string; category: string; growth_raw: string | null; week: string; region: string }
+
 
 // ─── Pains & Gains Tab ────────────────────────────────────────────────────────
 
