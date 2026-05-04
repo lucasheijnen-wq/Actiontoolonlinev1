@@ -56,7 +56,7 @@ export async function extractProductNumbers(file: File): Promise<string[]> {
     if (rows.length > 0) {
       const headers = Object.keys(rows[0])
       const articleCol = headers.find((h) => /article\s*number/i.test(h))
-      const promoCol = headers.find((h) => /promo\s*\??/i.test(h))
+      const promoCol = headers.find((h) => /^promo\s*\??$/i.test(h))
 
       if (articleCol && promoCol) {
         // Structured mode: only include products where Promo? = 1
