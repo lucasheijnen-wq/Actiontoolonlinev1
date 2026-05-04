@@ -44,58 +44,63 @@ export async function extractProductNumbers(file: File): Promise<string[]> {
 
   const found = new Set<string>()
 
-  // Only scan "Artikellijst" tabs; fall back to all sheets if none found
-  const artikellijstSheets = workbook.SheetNames.filter((n) => /artikellijst/i.test(n))
-  const sheetsToScan = artikellijstSheets.length > 0 ? artikellijstSheets : workbook.SheetNames
-
-  for (const sheetName of sheetsToScan) {
+  // First pass: look for a sheet with structured "Article number" + "Promo?" columns
+  let usedStructured = false
+  for (const sheetName of workbook.SheetNames) {
     const sheet = workbook.Sheets[sheetName]
-
-    // Try structured extraction: look for "Article number" and "Promo?" columns
     const rows = XLSX.utils.sheet_to_json<Record<string, unknown>>(sheet, { defval: '' })
-    if (rows.length > 0) {
-      const headers = Object.keys(rows[0])
-      const articleCol = headers.find((h) => /article\s*number/i.test(h))
-      const promoCol = headers.find((h) => /^promo\s*\??$/i.test(h))
+    if (rows.length === 0) continue
 
-      if (articleCol && promoCol) {
-        // Structured mode: only include products where Promo? = 1
-        for (const row of rows) {
-          const promoVal = String(row[promoCol]).trim()
-          if (promoVal !== '1') continue
+    const headers = Object.keys(rows[0])
+    const articleCol = headers.find((h) => /article\s*number/i.test(h))
+    const promoCol = headers.find((h) => /^promo\s*\??$/i.test(h))
 
-          const articleVal = String(row[articleCol]).trim()
-          const matches = articleVal.match(PRODUCT_NUMBER_RE)
+    if (articleCol && promoCol) {
+      // Structured mode: only include products where Promo? = 1
+      for (const row of rows) {
+        const promoVal = String(row[promoCol]).trim()
+        if (promoVal !== '1') continue
+
+        const articleVal = String(row[articleCol]).trim()
+        const matches = articleVal.match(PRODUCT_NUMBER_RE)
+        if (matches) {
+          for (const m of matches) {
+            if (isLikelyProductNumber(m)) found.add(m)
+          }
+        }
+      }
+      usedStructured = true
+      break // only use the first sheet with both columns
+    }
+  }
+
+  // Fallback: if no structured sheet was found, scan all cells for 7-digit numbers
+  if (!usedStructured) {
+    const artikellijstSheets = workbook.SheetNames.filter((n) => /artikellijst/i.test(n))
+    const sheetsToScan = artikellijstSheets.length > 0 ? artikellijstSheets : workbook.SheetNames
+
+    for (const sheetName of sheetsToScan) {
+      const sheet = workbook.Sheets[sheetName]
+      const cellAddresses = Object.keys(sheet).filter((key) => !key.startsWith('!'))
+
+      for (const addr of cellAddresses) {
+        const cell = sheet[addr]
+        if (!cell) continue
+
+        const values: string[] = []
+        if (cell.v !== undefined && cell.v !== null) {
+          values.push(String(cell.v))
+        }
+        if (cell.w) {
+          values.push(cell.w)
+        }
+
+        for (const val of values) {
+          const matches = val.match(PRODUCT_NUMBER_RE)
           if (matches) {
             for (const m of matches) {
               if (isLikelyProductNumber(m)) found.add(m)
             }
-          }
-        }
-        continue // skip fallback for this sheet
-      }
-    }
-
-    // Fallback: scan all cells for 7-digit numbers
-    const cellAddresses = Object.keys(sheet).filter((key) => !key.startsWith('!'))
-
-    for (const addr of cellAddresses) {
-      const cell = sheet[addr]
-      if (!cell) continue
-
-      const values: string[] = []
-      if (cell.v !== undefined && cell.v !== null) {
-        values.push(String(cell.v))
-      }
-      if (cell.w) {
-        values.push(cell.w)
-      }
-
-      for (const val of values) {
-        const matches = val.match(PRODUCT_NUMBER_RE)
-        if (matches) {
-          for (const m of matches) {
-            if (isLikelyProductNumber(m)) found.add(m)
           }
         }
       }
